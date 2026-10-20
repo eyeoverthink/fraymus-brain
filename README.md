@@ -58,7 +58,7 @@ From the eight-block sample, how many tensors stayed under a max-error budget:
 
 That sample is not the full tensor. The eight quietest small tensors were scanned block by block. Every one of them rose. The best of those full scans is `blk.0.attn_v.weight`: sample max `0.023`, full max `0.106`, mean of the block maxes `0.019`, all 3,584 scales on the φ pair. `blk.3.attn_output.weight` went from a sample max of `0.024` to a full max of `0.234`. `blk.0.attn_k.weight` is the sample's outlier and its full max is `0.722`.
 
-A crumb checkpoint waits on the full scan. The mean stays near `0.02`. The max is one heavy weight in a block of small weights.
+The mean stays near `0.02`. The max is one heavy weight in a block of small weights.
 
 `ledgerWithOutliers(weights, 0.05)` keeps that heavy weight as the file float and leaves the rest ternary. Each kept weight costs 6 bytes: a block-local index and the float. The inlier error is capped at `0.05`. On the four tensors scanned in full:
 
@@ -73,17 +73,23 @@ A crumb checkpoint waits on the full scan. The mean stays near `0.02`. The max i
 
 ### One trained layer
 
-[`examples/train-attn-v.mjs`](examples/train-attn-v.mjs) loads that Q8_0 matrix, 128 rows by 896 columns, and teaches the ledger to match the matrix output. A step is kept only when three things are true: the training-batch error falls, a fresh batch does not rise, and every inlier stays inside `0.05`. The 27 outlier floats do not move.
+[`examples/train-attn-v.mjs`](examples/train-attn-v.mjs) loads that Q8_0 matrix, 128 rows by 896 columns. The teacher is the dequantized Q8 matrix. A vote step is kept only when the training-batch error falls, a fresh batch does not rise, and every inlier stays inside `0.05`. The 27 outlier floats do not move.
 
-| | Before | After |
-| --- | ---: | ---: |
-| Training relative RMSE | 0.517 | 0.502 |
-| Fresh-batch relative RMSE | 0.535 | 0.535 |
-| Steps kept |  | 6 of 8 |
-| Inlier max | 0.050 | 0.0499 |
-| Outliers | 27 | 27 |
+The first training pass, before any row gain, moved the training relative RMSE from `0.517` to `0.502` and left the fresh batch at `0.535`. A weight miss of `0.05` adds up across 896 columns. One scale per block does not fix a whole row that is short of the file.
 
-The fresh batch still misses by about half the Q8 output. Matching the weights inside `0.05` does not yet match the layer output. The checkpoint is [`checkpoints/qwen2.5-0.5b-blk0-attn-v.json`](checkpoints/qwen2.5-0.5b-blk0-attn-v.json). The Q8 blocks stay in the GGUF file.
+`fitRowGains` then solves one multiplier per output row. Outlier floats stay on the file value. The fit is least squares on the ternary weights only: `s = ((w − b) · a) / (a · a)`. Each `s` is stored with `encodeScale` and baked into that row's block scales, so the ledger does not grow. All 128 scales stayed on the φ pair. They ran from `1.284` to `1.396`, mean `1.349`. The ternary rows were about three quarters of the file rows. A second fit that refuses any gain which would push an inlier past `0.05` kept every one of those 128 gains.
+
+| | Block ledger | After the row gain | After 8 more vote steps |
+| --- | ---: | ---: | ---: |
+| Fresh-batch relative RMSE | 0.535 | 0.490 | 0.489 |
+| Training relative RMSE | 0.517 | 0.464 | 0.448 |
+| Inlier max | 0.0499 | 0.0473 | 0.0473 |
+| Outliers | 27 | 27 | 27 |
+| Steps kept |  |  | 5 of 8 |
+
+The row gain is a gain correction. It does not cancel 896 separate misses. The fresh batch is still about half the Q8 output. Replacing the 28 block scales with one abs-mean scale for the whole row made the fresh batch worse, `0.543`, even though that encoding is smaller (29,224 bytes, 28 outliers). The block scales stay.
+
+The checkpoint is [`checkpoints/qwen2.5-0.5b-blk0-attn-v.json`](checkpoints/qwen2.5-0.5b-blk0-attn-v.json). It is the ledger after the row gain and those eight vote steps. The Q8 blocks stay in the GGUF file.
 
 ```bash
 node examples/train-attn-v.mjs /path/to/model.gguf
@@ -102,7 +108,7 @@ npm run phi75
 node examples/gguf-ledger.mjs /path/to/model.gguf 8
 ```
 
-`npm test` is `node --test test/*.test.mjs`. The checks cover Think, a FlyGNN bind, the ternary cortex, the φ scale, one training run, and the Q5_0, Q6_K, and Q4_K decoders.
+`npm test` is `node --test test/*.test.mjs`. Sixteen checks cover Think, a FlyGNN bind, the ternary cortex, the φ scale, the row gain, one training run, and the Q5_0, Q6_K, and Q4_K decoders.
 
 From your own project:
 
@@ -183,6 +189,7 @@ The ground-up entry is [`index.js`](index.js). Everything else is a direct impor
 | `createInitialTernaryCortex`, `quantizeAndEvaluateTernaryCortex`, `packNeedle3TernaryCrumbs` | [`sovereignEcosystem.js`](kernel/sovereignEcosystem.js) | 16×16 weights in `{-1, 0, +1}`, 4 trits per byte, add/sub forward |
 | `WolframRule30`, `computeRadius`, `computeContinuity`, `evaluateInArena` | [`orbital.js`](kernel/orbital.js) | Drift, memory radius, five physics checks on a kernel string |
 | `packQ8_0`, `unpackQ8_0`, `encodeScale`, `decodeScale`, `ledgerFromFloats`, `ledgerWithOutliers`, `trainPhi75` | [`phi75.js`](kernel/phi75.js) | File truth, short scale, outlier slot, training step |
+| `fitRowGains`, `bakeRowGains`, `trainLedgerMatrix`, `outputLoss` | [`layerTrain.js`](kernel/layerTrain.js) | One φ gain per output row, then the vote trainer |
 | `readGguf`, `unpackQ5_0`, `unpackQ6_K`, `unpackQ4_K`, `sampleTensor` | [`gguf.js`](kernel/gguf.js) | Open a GGUF and score blocks against the ledger |
 
 `createMind()` starts wrong on purpose:
@@ -395,6 +402,8 @@ Think is the caller that uses this machine as the thing under test. You can also
 | --- | --- |
 | [`test/think.test.mjs`](test/think.test.mjs) | Minus, times, and divide rewrite once. Replay on the second subtraction. Missing recall fails. A sentence stays unverified. Two binds change placement to `next-free`. |
 | [`test/phi75.test.mjs`](test/phi75.test.mjs) | φ recurrence through 40. φ^75 matches the brand seed inside `1e-12` relative. `0.125` is exact. `1/3` at `1e-12` falls back to the raw float. Q8_0 dequant matches `scale * code`. The sine ledger is smaller than fp32 and reports a nonzero trit error. The toy neuron reaches trits `[1, -1]` and then holds. |
+| [`test/gguf.test.mjs`](test/gguf.test.mjs) | Q5_0 high bits, Q6_K 6-bit codes, and Q4_K super-block scales. |
+| [`test/layerTrain.test.mjs`](test/layerTrain.test.mjs) | A blank ledger learns a toy matrix and then holds. A row gain restores a row that was stored at half scale. Outlier floats stay on the file value. |
 
 [`examples/think-once.mjs`](examples/think-once.mjs) and [`examples/phi75-block.mjs`](examples/phi75-block.mjs) print the same paths without the assert harness.
 
@@ -406,7 +415,7 @@ This is the ground-up order. Each layer has a file in this repo to start from. N
 
 2. **Native crumb kernel.** Same bit layout as `packCrumbs` and `packNeedle3TernaryCrumbs`: four trits per byte, `3 / 0 / 1`. The JS loops in `phi75.js` and `sovereignEcosystem.js` are the reference outputs the native kernel has to match on a fixed input.
 
-3. **One trained layer.** Done as a measurement, not as a replacement. `blk.0.attn_v.weight` trained for 8 steps under the fresh-batch gate. The training error moved from `0.517` to `0.502` relative RMSE. The fresh batch stayed at `0.535`. The next change is a scale per output row, so a miss of `0.05` in a weight does not add up across 896 columns.
+3. **One trained layer.** Measured, not a replacement. On `blk.0.attn_v.weight` the row gain moved the fresh-batch relative RMSE from `0.535` to `0.490` and held the inlier max at `0.0473`. Eight vote steps after that moved the fresh batch to `0.489`. The leftover is the three-level pattern across 896 columns. One more multiplier per row will not remove it. The next measurement is a code with more than three levels inside the block, scored the same way: fresh-batch relative RMSE, inlier max, and bytes against the Q8 file.
 
 4. **Tool plane.** `think` is the shell's checker for arithmetic, remembered facts, and FlyGNN binds. A sentence stays `UNVERIFIED` until you add a checker for that kind of sentence. Add a checker by giving it an expected value the way expressions already have one. Do not score the unverified path as a pass.
 
@@ -414,7 +423,7 @@ This is the ground-up order. Each layer has a file in this repo to start from. N
 
 6. **Boot.** A single process: load the ledger or the Q8 blocks, load the mind JSON through `normalizeMind`, answer a tool call with `think`, answer a language call with the crumb kernel. FrayVM stays the place a tool's program is run and checked.
 
-The table in [Measured](#measured) is step 1. The next session trains one layer against it. The chatbot is step 6, after that layer's full scan is inside the budget.
+The table in [Measured](#measured) is step 1. Step 3 is the row-gain measurement on `blk.0.attn_v.weight`. The chatbot is step 6, after a layer's fresh-batch error is small enough to stand in for the Q8 matmul. It is not.
 
 ## Layout
 

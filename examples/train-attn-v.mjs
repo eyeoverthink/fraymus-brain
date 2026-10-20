@@ -2,7 +2,7 @@ import { writeFile } from "node:fs/promises";
 import { mkdir } from "node:fs/promises";
 import { closeGguf, readGguf } from "../kernel/gguf.js";
 import { unpackQ8_0 } from "../kernel/phi75.js";
-import { blocksFromWeights, checkpointBlocks, makeInputs, trainLedgerMatrix } from "../kernel/layerTrain.js";
+import { bakeRowGains, blocksFromWeights, checkpointBlocks, fitRowGains, makeInputs, outputLoss, reconstructBlocks, trainLedgerMatrix } from "../kernel/layerTrain.js";
 
 const path = process.argv[2];
 const out = process.argv[3] || "checkpoints/qwen2.5-0.5b-blk0-attn-v.json";
@@ -31,6 +31,11 @@ for (let block = 0; block < blocksN; block += 1) {
 
 const budget = 0.05;
 const blocks = blocksFromWeights(weights, 32, budget);
+const fresh = makeInputs(32, cols, 175);
+const beforeGain = outputLoss(weights, reconstructBlocks(blocks, 32), fresh, rows, cols);
+const gains = fitRowGains(weights, blocks, rows, cols, 32, budget);
+bakeRowGains(blocks, gains, cols, 32);
+const afterGain = outputLoss(weights, reconstructBlocks(blocks, 32), fresh, rows, cols);
 const outliers = blocks.reduce((sum, block) => sum + block.outlier.reduce((s, flag) => s + flag, 0), 0);
 const report = trainLedgerMatrix(blocks, weights, rows, cols, {
   blockSize: 32,
@@ -40,7 +45,7 @@ const report = trainLedgerMatrix(blocks, weights, rows, cols, {
   lr: 0.02,
   seed: 75,
   train: makeInputs(32, cols, 75),
-  heldOut: makeInputs(32, cols, 175)
+  heldOut: fresh
 });
 
 const payload = {
@@ -60,7 +65,9 @@ const payload = {
     heldOutRelativeAfter: report.heldOutAfter.relative,
     kept: report.kept,
     steps: report.steps,
-    maxInlierError: report.maxInlierError
+    maxInlierError: report.maxInlierError,
+    rowGainRelativeBefore: beforeGain.relative,
+    rowGainRelativeAfter: afterGain.relative
   },
   blocks: checkpointBlocks(blocks)
 };

@@ -42,6 +42,88 @@ export function reconstructBlocks(blocks, blockSize) {
   return out;
 }
 
+export function fitRowGains(fileWeights, blocks, rows, cols, blockSize, budget) {
+  const led = reconstructBlocks(blocks, blockSize);
+  const gains = [];
+  for (let r = 0; r < rows; r += 1) {
+    const base = r * cols;
+    let num = 0;
+    let den = 0;
+    for (let c = 0; c < cols; c += 1) {
+      const index = base + c;
+      const block = blocks[Math.floor(index / blockSize)];
+      if (block.outlier[index % blockSize]) continue;
+      const approx = led[index];
+      num += fileWeights[index] * approx;
+      den += approx * approx;
+    }
+    let gain = den === 0 ? 1 : num / den;
+    if (budget != null) {
+      let max = 0;
+      for (let c = 0; c < cols; c += 1) {
+        const index = base + c;
+        const block = blocks[Math.floor(index / blockSize)];
+        if (block.outlier[index % blockSize]) continue;
+        max = Math.max(max, Math.abs(gain * led[index] - fileWeights[index]));
+      }
+      if (max > budget + 1e-6) gain = 1;
+    }
+    gains.push(encodeScale(gain));
+  }
+  return gains;
+}
+
+export function bakeRowGains(blocks, gains, cols, blockSize) {
+  for (let b = 0; b < blocks.length; b += 1) {
+    const row = Math.floor((b * blockSize) / cols);
+    const next = decodeScale(blocks[b].scale) * decodeScale(gains[row]);
+    blocks[b].scale = encodeScale(next);
+  }
+}
+
+export function reconstructWithRowGains(blocks, blockSize, gains, cols) {
+  const out = new Float32Array(blocks.length * blockSize);
+  for (let b = 0; b < blocks.length; b += 1) {
+    const block = blocks[b];
+    const scale = decodeScale(block.scale);
+    const base = b * blockSize;
+    for (let i = 0; i < blockSize; i += 1) {
+      const index = base + i;
+      if (block.outlier[i]) out[index] = block.exact[i];
+      else out[index] = block.trits[i] * scale * decodeScale(gains[Math.floor(index / cols)]);
+    }
+  }
+  return out;
+}
+
+export function rowLedger(fileWeights, rows, cols, budget) {
+  const blocks = [];
+  for (let r = 0; r < rows; r += 1) {
+    const slice = fileWeights.subarray(r * cols, (r + 1) * cols);
+    const led = ledgerWithOutliers(slice, budget);
+    const outlier = new Uint8Array(cols);
+    const exact = new Float32Array(cols);
+    for (const index of led.outlierIndex) {
+      outlier[index] = 1;
+      exact[index] = slice[index];
+    }
+    blocks.push({ trits: led.trits, scale: led.scale, outlier, exact, outlierCount: led.outlierCount, ledgerBytes: led.ledgerBytes });
+  }
+  return blocks;
+}
+
+export function reconstructRows(rowsBlocks) {
+  const cols = rowsBlocks[0].trits.length;
+  const out = new Float32Array(rowsBlocks.length * cols);
+  for (let r = 0; r < rowsBlocks.length; r += 1) {
+    const block = rowsBlocks[r];
+    const scale = decodeScale(block.scale);
+    const base = r * cols;
+    for (let c = 0; c < cols; c += 1) out[base + c] = block.outlier[c] ? block.exact[c] : block.trits[c] * scale;
+  }
+  return out;
+}
+
 export function maxInlierError(blocks, fileWeights, blockSize) {
   const led = reconstructBlocks(blocks, blockSize);
   let max = 0;
