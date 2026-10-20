@@ -69,7 +69,25 @@ A crumb checkpoint waits on the full scan. The mean stays near `0.02`. The max i
 | `blk.11.ffn_down.weight` Q4_K | 2,451,456 | `0.582` | `0.050` | 0.60 per block | 1,202,402 | 0.49× |
 | `blk.0.attn_k.weight` Q5_0 | 78,848 | `0.722` | `0.050` | 4.82 per block | 143,056 | 1.81× |
 
-`blk.0.attn_v.weight` is the first layer to train. Twenty-seven exact floats cover the whole tensor, the max miss is `0.05`, and the checkpoint is about a third of the Q8_0 bytes. `blk.0.attn_k.weight` gets larger than its Q5_0 blocks, so that tensor stays in the file. The rule is the byte count: store the outlier ledger when it is smaller than the GGUF blocks, and keep the GGUF blocks when it is not.
+`blk.0.attn_v.weight` is the layer that was trained. Twenty-seven exact floats cover the whole tensor, the max miss is `0.05`, and the checkpoint is about a third of the Q8_0 bytes. `blk.0.attn_k.weight` gets larger than its Q5_0 blocks, so that tensor stays in the file. The rule is the byte count: store the outlier ledger when it is smaller than the GGUF blocks, and keep the GGUF blocks when it is not.
+
+### One trained layer
+
+[`examples/train-attn-v.mjs`](examples/train-attn-v.mjs) loads that Q8_0 matrix, 128 rows by 896 columns, and teaches the ledger to match the matrix output. A step is kept only when three things are true: the training-batch error falls, a fresh batch does not rise, and every inlier stays inside `0.05`. The 27 outlier floats do not move.
+
+| | Before | After |
+| --- | ---: | ---: |
+| Training relative RMSE | 0.517 | 0.502 |
+| Fresh-batch relative RMSE | 0.535 | 0.535 |
+| Steps kept |  | 6 of 8 |
+| Inlier max | 0.050 | 0.0499 |
+| Outliers | 27 | 27 |
+
+The fresh batch still misses by about half the Q8 output. Matching the weights inside `0.05` does not yet match the layer output. The checkpoint is [`checkpoints/qwen2.5-0.5b-blk0-attn-v.json`](checkpoints/qwen2.5-0.5b-blk0-attn-v.json). The Q8 blocks stay in the GGUF file.
+
+```bash
+node examples/train-attn-v.mjs /path/to/model.gguf
+```
 
 Q2_K, Q3_K, Q5_K, and the IQ types are not in this file. F32 norms are 71,552 weights and were not passed through the ledger.
 
@@ -388,7 +406,7 @@ This is the ground-up order. Each layer has a file in this repo to start from. N
 
 2. **Native crumb kernel.** Same bit layout as `packCrumbs` and `packNeedle3TernaryCrumbs`: four trits per byte, `3 / 0 / 1`. The JS loops in `phi75.js` and `sovereignEcosystem.js` are the reference outputs the native kernel has to match on a fixed input.
 
-3. **One trained layer.** `blk.0.attn_v.weight` passed the `0.05` budget with 27 outlier floats. Next, freeze the rest of Qwen2.5 0.5B and train that layer: one scale pair per block, one vote per trit, the outlier floats held fixed, reject the step when the batch loss rises. The Q8_0 blocks stay on disk until that training step is the checkpoint you load.
+3. **One trained layer.** Done as a measurement, not as a replacement. `blk.0.attn_v.weight` trained for 8 steps under the fresh-batch gate. The training error moved from `0.517` to `0.502` relative RMSE. The fresh batch stayed at `0.535`. The next change is a scale per output row, so a miss of `0.05` in a weight does not add up across 896 columns.
 
 4. **Tool plane.** `think` is the shell's checker for arithmetic, remembered facts, and FlyGNN binds. A sentence stays `UNVERIFIED` until you add a checker for that kind of sentence. Add a checker by giving it an expected value the way expressions already have one. Do not score the unverified path as a pass.
 
@@ -413,8 +431,10 @@ kernel/emojiCodec.js
 kernel/orbital.js        Rule 30 and the arena
 kernel/phi75.js          Q8_0 and the vote ledger
 kernel/gguf.js           GGUF header, Q5_0, Q6_K, Q4_K
+kernel/layerTrain.js     One-layer ledger trainer
+checkpoints/             blk.0.attn_v ledger
 test/                    node --test
-examples/                think-once, phi75-block, gguf-ledger
+examples/                think-once, phi75-block, gguf-ledger, train-attn-v
 ```
 
 Provenance of the engines: [eyeoverthink/fraymus-css](https://github.com/eyeoverthink/fraymus-css) `0d90b71`. Secrets, face projects, and `data/brain` are not in either repo.

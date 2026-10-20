@@ -23,6 +23,7 @@ export {
   verifyCopilotCode
 } from "./kernel/orbital.js";
 export { readGguf, closeGguf, sampleTensor, unpackQ4_K, unpackQ5_0, unpackQ6_K, GGML_TYPE } from "./kernel/gguf.js";
+export { blocksFromWeights, reconstructBlocks, trainLedgerMatrix, outputLoss } from "./kernel/layerTrain.js";
 export {
   PHI,
   PHI_75,
