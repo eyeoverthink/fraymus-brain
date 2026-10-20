@@ -5,6 +5,7 @@
 
 <p align="center">
   <a href="https://github.com/eyeoverthink/fraymus-css">Fraymus Web Studio</a> ·
+  <a href="#measured">Measured</a> ·
   <a href="#start">Start</a> ·
   <a href="#what-you-can-call">What you can call</a> ·
   <a href="#think">Think</a> ·
@@ -18,10 +19,48 @@ This repository is the runnable kernel. It is not the website. The website that 
 
 | File | Role |
 | --- | --- |
-| [`kernel/phi75.js`](kernel/phi75.js) | New. Q8_0 blocks, the φ scale pair, and the vote trainer |
+| [`kernel/phi75.js`](kernel/phi75.js) | Q8_0 blocks, the φ scale pair, and the vote trainer |
+| [`kernel/gguf.js`](kernel/gguf.js) | GGUF header plus Q8_0, Q5_0, Q6_K, and Q4_K decoders |
 | [`kernel/orbital.js`](kernel/orbital.js) | Rule 30, centripetal radius, and the five-stage quantum arena, taken out of the React page |
 
 `npm` is not required. Node 20 or newer runs the tests.
+
+## Measured
+
+The first real file was the local Ollama copy of **Qwen2.5 0.5B Instruct**. GGUF version 3. 397,807,936 bytes. 290 tensors. 494,032,768 weights. The reader is [`examples/gguf-ledger.mjs`](examples/gguf-ledger.mjs).
+
+```bash
+node examples/gguf-ledger.mjs /path/to/model.gguf 8
+```
+
+Eight blocks, spread across each tensor. 169 tensors have a decoder. That is 1,352 blocks.
+
+| Type | Tensors | Weights | φ scales | Raw fallbacks | Full-tensor max error | Full-tensor mean of block max |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Q5_0 | 132 | 251,854,848 | 1,056 / 1,056 | 0 | `0.722` on `blk.0.attn_k.weight` | `0.098` |
+| Q8_0 | 13 | 137,510,912 | 104 / 104 | 0 | `0.264` on `blk.21.attn_v.weight` | `0.063` |
+| Q6_K | 12 | 52,297,728 | 96 / 96 | 0 | `0.383` on `blk.7.ffn_down.weight` | `0.053` |
+| Q4_K | 12 | 52,297,728 | 96 / 96 | 0 | `0.582` on `blk.11.ffn_down.weight` | `0.049` |
+| F32 | 121 | 71,552 |  |  | Norms. Left as floats. |  |
+
+Every decoded scale stayed on the φ pair. None fell back to the raw float. On the four full tensors above, the scale error stayed under `2e-6`.
+
+The weight error is the trit. A block's abs-mean has three levels, and one heavy weight in a block of small weights misses by a lot. The eight-block sample is the lower view of that miss. The full scan of the same tensor is higher: `blk.21.attn_v.weight` sampled at `0.123` and measured `0.264` across all 3,584 blocks.
+
+From the eight-block sample, how many tensors stayed under a max-error budget:
+
+| Budget | Tensors at or under it, in the sample |
+| --- | --- |
+| `0.05` | 72 of 169 |
+| `0.10` | 152 of 169 |
+| `0.20` | 167 of 169 |
+| `0.50` | 168 of 169 |
+
+That sample is not the full tensor. The eight quietest small tensors were scanned block by block. Every one of them rose. The best of those full scans is `blk.0.attn_v.weight`: sample max `0.023`, full max `0.106`, mean of the block maxes `0.019`, all 3,584 scales on the φ pair. `blk.3.attn_output.weight` went from a sample max of `0.024` to a full max of `0.234`. `blk.0.attn_k.weight` is the sample's outlier and its full max is `0.722`.
+
+A crumb checkpoint waits on the full scan. The mean stays near `0.02`. The max is one heavy weight in a block of small weights. The next change is an outlier slot: those few weights keep the file float, and the rest of the block stays ternary. Until that slot exists, `blk.0.attn_k.weight` and the down projections stay in their GGUF blocks.
+
+Q2_K, Q3_K, Q5_K, and the IQ types are not in this file. F32 norms are 71,552 weights and were not passed through the ledger.
 
 ## Start
 
@@ -31,9 +70,10 @@ cd fraymus-brain
 npm test
 npm run think
 npm run phi75
+node examples/gguf-ledger.mjs /path/to/model.gguf 8
 ```
 
-`npm test` is `node --test test/*.test.mjs`. Nine checks cover Think, a FlyGNN bind, the ternary cortex, Q8_0, the φ scale, and one training run.
+`npm test` is `node --test test/*.test.mjs`. The checks cover Think, a FlyGNN bind, the ternary cortex, the φ scale, one training run, and the Q5_0, Q6_K, and Q4_K decoders.
 
 From your own project:
 
@@ -114,6 +154,7 @@ The ground-up entry is [`index.js`](index.js). Everything else is a direct impor
 | `createInitialTernaryCortex`, `quantizeAndEvaluateTernaryCortex`, `packNeedle3TernaryCrumbs` | [`sovereignEcosystem.js`](kernel/sovereignEcosystem.js) | 16×16 weights in `{-1, 0, +1}`, 4 trits per byte, add/sub forward |
 | `WolframRule30`, `computeRadius`, `computeContinuity`, `evaluateInArena` | [`orbital.js`](kernel/orbital.js) | Drift, memory radius, five physics checks on a kernel string |
 | `packQ8_0`, `unpackQ8_0`, `encodeScale`, `decodeScale`, `ledgerFromFloats`, `trainPhi75` | [`phi75.js`](kernel/phi75.js) | File truth, short scale, training step |
+| `readGguf`, `unpackQ5_0`, `unpackQ6_K`, `unpackQ4_K`, `sampleTensor` | [`gguf.js`](kernel/gguf.js) | Open a GGUF and score blocks against the ledger |
 
 `createMind()` starts wrong on purpose:
 
@@ -332,11 +373,11 @@ Think is the caller that uses this machine as the thing under test. You can also
 
 This is the ground-up order. Each layer has a file in this repo to start from. None of them is the finished operating system.
 
-1. **Weight plane.** Stream one real `.gguf`. For every `Q8_0` block, `unpackQ8_0`, then `ledgerFromFloats`. Write a side table: tensor name, block count, how many blocks stayed on the φ pair, how many fell back to raw, and the max error versus the file. That table decides which layers may train as crumbs. Layers over budget stay Q8_0. Other GGUF types (`Q4_K`, `Q6_K`) get their own unpacker beside `unpackQ8_0`, always dequantizing to the floats that type already defines.
+1. **Weight plane.** Done for this model. [`kernel/gguf.js`](kernel/gguf.js) reads the header and decodes Q8_0, Q5_0, Q6_K, and Q4_K into the floats those blocks already store. The [measured table](#measured) is the budget. A tensor over the budget keeps its GGUF blocks. `blk.0.attn_k.weight` is in that set.
 
 2. **Native crumb kernel.** Same bit layout as `packCrumbs` and `packNeedle3TernaryCrumbs`: four trits per byte, `3 / 0 / 1`. The JS loops in `phi75.js` and `sovereignEcosystem.js` are the reference outputs the native kernel has to match on a fixed input.
 
-3. **One trained layer.** Freeze the rest of a small model. Replace one linear layer with `trainPhi75` generalized from a neuron to a matrix: one scale pair per block, one vote per trit, reject the step when the batch loss rises. Keep the fp32 or Q8 master for that layer until the ledger error stays inside the budget you measured in step 1. Then the checkpoint you write is the ledger.
+3. **One trained layer.** Next. The full scans say a sample under `0.05` is not a full tensor under `0.05`. First add an outlier slot so a few weights in a block keep the file float. Then full-scan `blk.0.attn_v.weight` again. If that max is inside the budget, that is the layer to train: one scale pair per block, one vote per trit, reject the step when the batch loss rises. The original blocks stay until then.
 
 4. **Tool plane.** `think` is the shell's checker for arithmetic, remembered facts, and FlyGNN binds. A sentence stays `UNVERIFIED` until you add a checker for that kind of sentence. Add a checker by giving it an expected value the way expressions already have one. Do not score the unverified path as a pass.
 
@@ -344,7 +385,7 @@ This is the ground-up order. Each layer has a file in this repo to start from. N
 
 6. **Boot.** A single process: load the ledger or the Q8 blocks, load the mind JSON through `normalizeMind`, answer a tool call with `think`, answer a language call with the crumb kernel. FrayVM stays the place a tool's program is run and checked.
 
-The first session of that project should be step 1 on the smallest GGUF you already have. The output is a table of errors, not a chatbot. The chatbot is step 6, after a layer has been trained against that table.
+The table in [Measured](#measured) is step 1. The next session trains one layer against it. The chatbot is step 6, after that layer's full scan is inside the budget.
 
 ## Layout
 
@@ -360,8 +401,9 @@ kernel/autopoieticAgent.js
 kernel/emojiCodec.js
 kernel/orbital.js        Rule 30 and the arena
 kernel/phi75.js          Q8_0 and the vote ledger
+kernel/gguf.js           GGUF header, Q5_0, Q6_K, Q4_K
 test/                    node --test
-examples/                think-once, phi75-block
+examples/                think-once, phi75-block, gguf-ledger
 ```
 
 Provenance of the engines: [eyeoverthink/fraymus-css](https://github.com/eyeoverthink/fraymus-css) `0d90b71`. Secrets, face projects, and `data/brain` are not in either repo.

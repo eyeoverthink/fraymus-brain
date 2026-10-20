@@ -22,6 +22,7 @@ export {
   evaluateInArena,
   verifyCopilotCode
 } from "./kernel/orbital.js";
+export { readGguf, closeGguf, sampleTensor, unpackQ4_K, unpackQ5_0, unpackQ6_K, GGML_TYPE } from "./kernel/gguf.js";
 export {
   PHI,
   PHI_75,
