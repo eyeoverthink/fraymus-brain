@@ -58,7 +58,18 @@ From the eight-block sample, how many tensors stayed under a max-error budget:
 
 That sample is not the full tensor. The eight quietest small tensors were scanned block by block. Every one of them rose. The best of those full scans is `blk.0.attn_v.weight`: sample max `0.023`, full max `0.106`, mean of the block maxes `0.019`, all 3,584 scales on the φ pair. `blk.3.attn_output.weight` went from a sample max of `0.024` to a full max of `0.234`. `blk.0.attn_k.weight` is the sample's outlier and its full max is `0.722`.
 
-A crumb checkpoint waits on the full scan. The mean stays near `0.02`. The max is one heavy weight in a block of small weights. The next change is an outlier slot: those few weights keep the file float, and the rest of the block stays ternary. Until that slot exists, `blk.0.attn_k.weight` and the down projections stay in their GGUF blocks.
+A crumb checkpoint waits on the full scan. The mean stays near `0.02`. The max is one heavy weight in a block of small weights.
+
+`ledgerWithOutliers(weights, 0.05)` keeps that heavy weight as the file float and leaves the rest ternary. Each kept weight costs 6 bytes: a block-local index and the float. The inlier error is capped at `0.05`. On the four tensors scanned in full:
+
+| Tensor | File bytes | Plain ledger max | With outliers | Outliers | Ledger bytes | Versus the file |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| `blk.0.attn_v.weight` Q8_0 | 121,856 | `0.106` | `0.050` | 27 in 3,584 blocks | 39,586 | 0.33× |
+| `blk.7.ffn_down.weight` Q6_K | 3,575,040 | `0.383` | `0.050` | 0.61 per block | 1,203,200 | 0.34× |
+| `blk.11.ffn_down.weight` Q4_K | 2,451,456 | `0.582` | `0.050` | 0.60 per block | 1,202,402 | 0.49× |
+| `blk.0.attn_k.weight` Q5_0 | 78,848 | `0.722` | `0.050` | 4.82 per block | 143,056 | 1.81× |
+
+`blk.0.attn_v.weight` is the first layer to train. Twenty-seven exact floats cover the whole tensor, the max miss is `0.05`, and the checkpoint is about a third of the Q8_0 bytes. `blk.0.attn_k.weight` gets larger than its Q5_0 blocks, so that tensor stays in the file. The rule is the byte count: store the outlier ledger when it is smaller than the GGUF blocks, and keep the GGUF blocks when it is not.
 
 Q2_K, Q3_K, Q5_K, and the IQ types are not in this file. F32 norms are 71,552 weights and were not passed through the ledger.
 
@@ -153,7 +164,7 @@ The ground-up entry is [`index.js`](index.js). Everything else is a direct impor
 | `runSovereignAgiContinuum` | same | Seven fixed suites. An epoch scores its max only when `verified` is true |
 | `createInitialTernaryCortex`, `quantizeAndEvaluateTernaryCortex`, `packNeedle3TernaryCrumbs` | [`sovereignEcosystem.js`](kernel/sovereignEcosystem.js) | 16×16 weights in `{-1, 0, +1}`, 4 trits per byte, add/sub forward |
 | `WolframRule30`, `computeRadius`, `computeContinuity`, `evaluateInArena` | [`orbital.js`](kernel/orbital.js) | Drift, memory radius, five physics checks on a kernel string |
-| `packQ8_0`, `unpackQ8_0`, `encodeScale`, `decodeScale`, `ledgerFromFloats`, `trainPhi75` | [`phi75.js`](kernel/phi75.js) | File truth, short scale, training step |
+| `packQ8_0`, `unpackQ8_0`, `encodeScale`, `decodeScale`, `ledgerFromFloats`, `ledgerWithOutliers`, `trainPhi75` | [`phi75.js`](kernel/phi75.js) | File truth, short scale, outlier slot, training step |
 | `readGguf`, `unpackQ5_0`, `unpackQ6_K`, `unpackQ4_K`, `sampleTensor` | [`gguf.js`](kernel/gguf.js) | Open a GGUF and score blocks against the ledger |
 
 `createMind()` starts wrong on purpose:
@@ -377,7 +388,7 @@ This is the ground-up order. Each layer has a file in this repo to start from. N
 
 2. **Native crumb kernel.** Same bit layout as `packCrumbs` and `packNeedle3TernaryCrumbs`: four trits per byte, `3 / 0 / 1`. The JS loops in `phi75.js` and `sovereignEcosystem.js` are the reference outputs the native kernel has to match on a fixed input.
 
-3. **One trained layer.** Next. The full scans say a sample under `0.05` is not a full tensor under `0.05`. First add an outlier slot so a few weights in a block keep the file float. Then full-scan `blk.0.attn_v.weight` again. If that max is inside the budget, that is the layer to train: one scale pair per block, one vote per trit, reject the step when the batch loss rises. The original blocks stay until then.
+3. **One trained layer.** `blk.0.attn_v.weight` passed the `0.05` budget with 27 outlier floats. Next, freeze the rest of Qwen2.5 0.5B and train that layer: one scale pair per block, one vote per trit, the outlier floats held fixed, reject the step when the batch loss rises. The Q8_0 blocks stay on disk until that training step is the checkpoint you load.
 
 4. **Tool plane.** `think` is the shell's checker for arithmetic, remembered facts, and FlyGNN binds. A sentence stays `UNVERIFIED` until you add a checker for that kind of sentence. Add a checker by giving it an expected value the way expressions already have one. Do not score the unverified path as a pass.
 

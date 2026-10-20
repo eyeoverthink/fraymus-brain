@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import {
+  ledgerWithOutliers,
   PHI,
   PHI_75,
   phiPow,
@@ -77,4 +78,16 @@ test("one neuron learns a ternary pattern and refuses a step that gets worse", (
   assert.deepEqual(Array.from(neuron.trits), [1, -1]);
   assert.equal(last.kept, false);
   assert.ok(end <= last.before + 1e-9);
+});
+
+test("an outlier keeps the file float and the rest of the block stays under budget", () => {
+  const values = Float32Array.from({ length: 32 }, () => 0.01);
+  values[7] = 0.8;
+  const plain = ledgerFromFloats(values);
+  const held = ledgerWithOutliers(values, 0.05);
+  assert.ok(plain.maxLedgerError > 0.05);
+  assert.deepEqual(held.outlierIndex, [7]);
+  assert.ok(Math.abs(held.reconstructed[7] - values[7]) < 1e-7);
+  assert.ok(held.maxLedgerError <= 0.05 + 1e-6);
+  assert.ok(held.ledgerBytes < plain.fp32Bytes);
 });

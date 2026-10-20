@@ -32,6 +32,7 @@ export {
   encodeScale,
   decodeScale,
   ledgerFromFloats,
+  ledgerWithOutliers,
   createPhi75Neuron,
   predictPhi75,
   lossPhi75,

@@ -225,6 +225,72 @@ export function ledgerFromFloats(floats, options = {}) {
   };
 }
 
+export function ledgerWithOutliers(floats, budget = 0.05, options = {}) {
+  const values = Float32Array.from(floats);
+  const n = values.length;
+  const outlier = new Uint8Array(n);
+  const trits = new Int8Array(n);
+  let gamma = 0;
+  for (let pass = 0; pass < 4; pass += 1) {
+    let absSum = 0;
+    let kept = 0;
+    for (let i = 0; i < n; i += 1) {
+      if (outlier[i]) continue;
+      absSum += Math.abs(values[i]);
+      kept += 1;
+    }
+    gamma = kept ? absSum / kept : 0;
+    const denom = gamma + 1e-12;
+    let marked = 0;
+    for (let i = 0; i < n; i += 1) {
+      if (outlier[i]) {
+        trits[i] = 0;
+        continue;
+      }
+      const q = Math.round(values[i] / denom);
+      trits[i] = q > 1 ? 1 : q < -1 ? -1 : q;
+      if (Math.abs(values[i] - trits[i] * gamma) > budget) {
+        outlier[i] = 1;
+        trits[i] = 0;
+        marked += 1;
+      }
+    }
+    if (!marked) break;
+  }
+  const scale = encodeScale(gamma, options.tolerance);
+  const decodedScale = decodeScale(scale);
+  const reconstructed = new Float32Array(n);
+  const slots = [];
+  let maxLedgerError = 0;
+  for (let i = 0; i < n; i += 1) {
+    if (outlier[i]) {
+      reconstructed[i] = values[i];
+      slots.push(i);
+      continue;
+    }
+    reconstructed[i] = trits[i] * decodedScale;
+    maxLedgerError = Math.max(maxLedgerError, Math.abs(reconstructed[i] - values[i]));
+  }
+  const packed = packCrumbs(trits);
+  const scaleBytes = scale.fallback ? 4 : 3;
+  const outlierBytes = slots.length * 6;
+  return {
+    count: n,
+    trits,
+    packed,
+    scale,
+    gamma,
+    decodedScale,
+    reconstructed,
+    outlierIndex: slots,
+    outlierCount: slots.length,
+    maxLedgerError,
+    phiScaleError: Math.abs(decodedScale - gamma),
+    ledgerBytes: packed.length + scaleBytes + outlierBytes,
+    fp32Bytes: n * 4
+  };
+}
+
 export function ternaryDot(trits, inputs) {
   let acc = 0;
   for (let i = 0; i < trits.length; i += 1) {
