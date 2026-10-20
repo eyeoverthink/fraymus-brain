@@ -1,0 +1,15 @@
+{
+  "name": "fraymus-brain",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "Fraymus brain kernel. Think, FrayVM, FlyGNN, ternary weights, and the φ^75 scale ledger.",
+  "scripts": {
+    "test": "node --test test/*.test.mjs",
+    "think": "node examples/think-once.mjs",
+    "phi75": "node examples/phi75-block.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}
